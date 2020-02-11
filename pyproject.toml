@@ -4,6 +4,7 @@ version = "0.1.0"
 description = ""
 authors = ["Naomichi Agata <agatan039@gmail.com>"]
 license = "MIT"
+packages = [{ include = "tabnet.py" }]
 
 [tool.poetry.dependencies]
 python = ">=3.7,<4.0"
