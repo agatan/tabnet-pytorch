@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "tabnet-pytorch"
+version = "0.1.0"
+description = ""
+authors = ["Naomichi Agata <agatan039@gmail.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = ">=3.7,<4.0"
+torch = "^1.4.0"
+numpy = "^1.18.1"
+
+[tool.poetry.dev-dependencies]
+black = "^19.10b0"
+mypy = "^0.761"
+flake8 = "^3.7.9"
+isort = "^4.3.21"
+ipython = "^7.12.0"
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
