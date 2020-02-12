@@ -61,21 +61,42 @@ class GLU(nn.Module):
         return F.glu(input)
 
 
+class GhostBatchNorm(nn.Module):
+    def __init__(
+        self, num_features: int, momentum: float, ghost_batch_size: int
+    ) -> None:
+        super().__init__()
+        self.bn = nn.BatchNorm1d(num_features, momentum=momentum)
+        self.ghost_batch_size = ghost_batch_size
+
+    def forward(self, input):
+        batch_size = input.size(0)
+        chunks = input.chunk((batch_size - 1) // self.ghost_batch_size + 1, dim=0)
+        normalized_chunks = [self.bn(chunk) for chunk in chunks]
+        return torch.cat(normalized_chunks, dim=0)
+
+
 class SharedFeatureTransformer(nn.Module):
     def __init__(
-        self, in_channels: int, hidden_size: int, bn_momentum: float = 0.1
+        self,
+        in_channels: int,
+        hidden_size: int,
+        bn_momentum: float,
+        ghost_batch_size: int,
     ) -> None:
         super().__init__()
         self.block = nn.Sequential(
             nn.Linear(in_channels, hidden_size * 2, bias=False),
-            # TODO: Ghost Batch Normalization
-            nn.BatchNorm1d(hidden_size * 2, momentum=bn_momentum),
+            GhostBatchNorm(
+                hidden_size * 2, momentum=bn_momentum, ghost_batch_size=ghost_batch_size
+            ),
             GLU(),
         )
         self.residual_block = nn.Sequential(
             nn.Linear(hidden_size, hidden_size * 2, bias=False),
-            # TODO: Ghost Batch Normalization
-            nn.BatchNorm1d(hidden_size * 2, momentum=bn_momentum),
+            GhostBatchNorm(
+                hidden_size * 2, momentum=bn_momentum, ghost_batch_size=ghost_batch_size
+            ),
             GLU(),
         )
 
@@ -91,12 +112,15 @@ class SharedFeatureTransformer(nn.Module):
 
 
 class FeatureTransformer(nn.Module):
-    def __init__(self, in_channels: int, bn_momentum: float = 0.1) -> None:
+    def __init__(
+        self, in_channels: int, bn_momentum: float, ghost_batch_size: int
+    ) -> None:
         super().__init__()
         self.residual_block = nn.Sequential(
             nn.Linear(in_channels, in_channels * 2, bias=False),
-            # TODO: Ghost Batch Normalization
-            nn.BatchNorm1d(in_channels * 2, momentum=bn_momentum),
+            GhostBatchNorm(
+                in_channels * 2, momentum=bn_momentum, ghost_batch_size=ghost_batch_size
+            ),
             GLU(),
         )
 
@@ -122,6 +146,7 @@ class TabNet(nn.Module):
         n_d: int = 16,
         n_a: int = 16,
         relaxation_factor: float = 2.0,
+        ghost_batch_size: int = 256,
     ):
         """
         Args:
@@ -134,6 +159,7 @@ class TabNet(nn.Module):
             n_d: hidden size of decision output.
             n_a: hidden size of attentive transformer.
             relaxation_factor: relaxation parameter of feature selection regularization.
+            ghost_batch_size: ghost batch size for GhostBatchNorm.
         """
         super().__init__()
         self.n_decision_steps = n_decision_steps
@@ -154,14 +180,14 @@ class TabNet(nn.Module):
         hidden_size = n_d + n_a
 
         shared_feature_transformer = SharedFeatureTransformer(
-            feature_channels, hidden_size, bn_momentum
+            feature_channels, hidden_size, bn_momentum, ghost_batch_size
         )
         self.feature_transformers = nn.ModuleList(
             [
                 nn.Sequential(
                     shared_feature_transformer,
-                    FeatureTransformer(hidden_size, bn_momentum),
-                    FeatureTransformer(hidden_size, bn_momentum),
+                    FeatureTransformer(hidden_size, bn_momentum, ghost_batch_size),
+                    FeatureTransformer(hidden_size, bn_momentum, ghost_batch_size),
                 )
                 for _ in range(n_decision_steps)
             ]
@@ -170,8 +196,11 @@ class TabNet(nn.Module):
             [
                 nn.Sequential(
                     nn.Linear(n_a, feature_channels, bias=False),
-                    # TODO: Ghost Batch Normalization
-                    nn.BatchNorm1d(feature_channels, momentum=bn_momentum),
+                    GhostBatchNorm(
+                        feature_channels,
+                        momentum=bn_momentum,
+                        ghost_batch_size=ghost_batch_size,
+                    ),
                 )
                 for _ in range(n_decision_steps - 1)
             ]
@@ -217,9 +246,7 @@ class TabNet(nn.Module):
 
         for step in range(self.n_decision_steps):
             x = self.feature_transformers[step](masked_feature)  # (N, hidden_size)
-            decision_out, coef_out = x.split(
-                self.n_d, dim=1
-            )  # (N, n_d), (N, n_a)
+            decision_out, coef_out = x.split(self.n_d, dim=1)  # (N, n_d), (N, n_a)
 
             if step != 0:
                 decision_out = F.relu(decision_out)
