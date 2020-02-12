@@ -138,9 +138,9 @@ class TabNet(nn.Module):
     def __init__(
         self,
         dense_channels: int,
+        cat_cardinalities: List[int],
         out_channels: int,
         n_decision_steps: int,
-        cat_cardinalities: List[int] = [],
         cat_emb_dim: int = 1,
         bn_momentum: float = 0.1,
         n_d: int = 16,
@@ -151,9 +151,9 @@ class TabNet(nn.Module):
         """
         Args:
             dense_channels: number of dense features.
+            cat_cardinalities: categorical feature cardinalities.
             out_channels: number of output channels.
             n_decision_steps: number of decision step layers.
-            cat_cardinalities: optional. categorical feature cardinalities.
             cat_emb_dim: categorical feature embedding size.
             bn_momentum: batch normalization momentum.
             n_d: hidden size of decision output.
@@ -207,19 +207,27 @@ class TabNet(nn.Module):
         )
         self.fc = nn.Linear(n_d, out_channels, bias=False)
 
-    def forward(self, dense_features, cat_features=None):
+    def forward(self, dense_features=None, cat_features=None):
         """
         Args:
-            dense_features (torch.Tensor): numerical dense features. shape: (N, dense_channels), dtype: float
+            dense_features (Optional[torch.Tensor]): numerical dense features. shape: (N, dense_channels), dtype: float
             cat_features (Optional[torch.Tensor]): categorical features. shape: (N, len(cat_cardinalities)), dtype: long
         Returns:
             logits (torch.Tensor): shape: (N, out_channels), dtype: float
             masks (List[torch.Tensor]): masks for each decision step. `n_decision_steps` tensors of shape (N, feature_size)
             sparsity_regularization (torch.Tensor): feature selection sparsity regularization loss
         """
-        batch_size = dense_features.size(0)
-        dtype = dense_features.dtype
-        device = dense_features.device
+        assert dense_features is not None or cat_features is not None
+
+        batch_size = (
+            dense_features.size(0)
+            if dense_features is not None
+            else cat_features.size(0)
+        )
+        dtype = torch.float
+        device = (
+            dense_features.device if dense_features is not None else cat_features.device
+        )
 
         feature = dense_features
         if cat_features is not None:
@@ -229,8 +237,11 @@ class TabNet(nn.Module):
                 self.cat_embeddings[i](cat_features[:, i])
                 for i in range(len(self.cat_embeddings))
             ]
-            # Concat dense and categoical features.
-            feature = torch.cat([dense_features] + cat_embs, dim=-1)
+            if feature is None:
+                feature = torch.cat(cat_embs, dim=-1)
+            else:
+                # Concat dense and categoical features.
+                feature = torch.cat([dense_features] + cat_embs, dim=-1)
 
         aggregated_output = torch.zeros(
             batch_size, self.n_d, dtype=dtype, device=device
