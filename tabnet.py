@@ -119,14 +119,26 @@ class TabNet(nn.Module):
         cat_cardinalities: List[int] = [],
         cat_emb_dim: int = 1,
         bn_momentum: float = 0.1,
-        decision_hidden_size: int = 16,
-        attention_hidden_size: int = 16,
+        n_d: int = 16,
+        n_a: int = 16,
         relaxation_factor: float = 2.0,
     ):
+        """
+        Args:
+            dense_channels: number of dense features.
+            out_channels: number of output channels.
+            n_decision_steps: number of decision step layers.
+            cat_cardinalities: optional. categorical feature cardinalities.
+            cat_emb_dim: categorical feature embedding size.
+            bn_momentum: batch normalization momentum.
+            n_d: hidden size of decision output.
+            n_a: hidden size of attentive transformer.
+            relaxation_factor: relaxation parameter of feature selection regularization.
+        """
         super().__init__()
         self.n_decision_steps = n_decision_steps
-        self.decision_hidden_size = decision_hidden_size
-        self.attention_hidden_size = attention_hidden_size
+        self.n_d = n_d
+        self.n_a = n_a
         self.relaxation_factor = relaxation_factor
 
         self.cat_embeddings = nn.ModuleList(
@@ -139,7 +151,7 @@ class TabNet(nn.Module):
         feature_channels = dense_channels + cat_emb_dim * len(cat_cardinalities)
         self.dense_bn = nn.BatchNorm1d(feature_channels, momentum=bn_momentum)
 
-        hidden_size = decision_hidden_size + attention_hidden_size
+        hidden_size = n_d + n_a
 
         shared_feature_transformer = SharedFeatureTransformer(
             feature_channels, hidden_size, bn_momentum
@@ -157,14 +169,14 @@ class TabNet(nn.Module):
         self.attentive_transformers = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(attention_hidden_size, feature_channels, bias=False),
+                    nn.Linear(n_a, feature_channels, bias=False),
                     # TODO: Ghost Batch Normalization
                     nn.BatchNorm1d(feature_channels, momentum=bn_momentum),
                 )
                 for _ in range(n_decision_steps - 1)
             ]
         )
-        self.fc = nn.Linear(decision_hidden_size, out_channels, bias=False)
+        self.fc = nn.Linear(n_d, out_channels, bias=False)
 
     def forward(self, dense_features, cat_features=None):
         """
@@ -192,7 +204,7 @@ class TabNet(nn.Module):
             feature = torch.cat([dense_features] + cat_embs, dim=-1)
 
         aggregated_output = torch.zeros(
-            batch_size, self.decision_hidden_size, dtype=dtype, device=device
+            batch_size, self.n_d, dtype=dtype, device=device
         )
         masked_feature = feature
         prior_scale_term = torch.ones(
@@ -206,8 +218,8 @@ class TabNet(nn.Module):
         for step in range(self.n_decision_steps):
             x = self.feature_transformers[step](masked_feature)  # (N, hidden_size)
             decision_out, coef_out = x.split(
-                self.decision_hidden_size, dim=1
-            )  # (N, decision_hidden_size), (N, attention_hidden_size)
+                self.n_d, dim=1
+            )  # (N, n_d), (N, n_a)
 
             if step != 0:
                 decision_out = F.relu(decision_out)
